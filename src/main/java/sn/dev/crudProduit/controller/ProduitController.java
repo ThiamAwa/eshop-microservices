@@ -1,60 +1,74 @@
 package sn.dev.crudProduit.controller;
 
 import jakarta.validation.Valid;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Controller;
-import org.springframework.ui.Model;
-import org.springframework.validation.BindingResult;
+import org.springframework.hateoas.CollectionModel;
+import org.springframework.hateoas.EntityModel;
+import org.springframework.hateoas.IanaLinkRelations;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 import sn.dev.crudProduit.Entities.Produit;
-import sn.dev.crudProduit.service.ProduitService;
+import sn.dev.crudProduit.controller.Assembler.ProduitModelAssembler;
+import sn.dev.crudProduit.doa.ProductDoa;
 
 import java.util.List;
-import java.util.Optional;
+import java.util.stream.Collectors;
 
-@Controller
+import static org.springframework.hateoas.server.mvc.WebMvcLinkBuilder.*;
+
+@RestController
+@RequestMapping("/api/produits")
 public class ProduitController {
 
-    private final ProduitService produitService;
+    private final ProductDoa productDoa;
+    private final ProduitModelAssembler assembler;
 
-    @Autowired
-    public ProduitController(ProduitService produitService) {
-        this.produitService = produitService;
+    public ProduitController(ProductDoa productDoa, ProduitModelAssembler assembler) {
+        this.productDoa = productDoa;
+        this.assembler = assembler;
     }
 
-    @GetMapping("/produit")
-    public String produit(Model model, @RequestParam(name = "query", defaultValue = "", required = false) String query) {
-        List<Produit> produits = query.isEmpty() ? produitService.findAll() : produitService.findAllByDesignationContaining(query);
-        model.addAttribute("listeproduits", produits);
-        model.addAttribute("produit", new Produit());
-        model.addAttribute("query", query);
-        return "produit";
+    @GetMapping
+    public CollectionModel<EntityModel<Produit>> getAll(@RequestParam(name = "query", defaultValue = "") String query) {
+        List<EntityModel<Produit>> produits = (query.isEmpty() ?
+                productDoa.findAll() :
+                productDoa.findAllByDesignationContaining(query))
+                .stream()
+                .map(assembler::toModel)
+                .collect(Collectors.toList());
+
+        return CollectionModel.of(produits,
+                linkTo(methodOn(ProduitController.class).getAll("")).withSelfRel());
     }
 
-    @GetMapping("/delete")
-    public String deleteProduit(@RequestParam("id") Long id) {
-        produitService.delete(id);
-        return "redirect:/produit";
+    @GetMapping("/{id}")
+    public EntityModel<Produit> getById(@PathVariable Long id) {
+        Produit produit = productDoa.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Produit non trouvé"));
+        return assembler.toModel(produit);
     }
 
-    @PostMapping("/save")
-    public String save(@Valid Produit produit, BindingResult bindingResult) {
-        if (bindingResult.hasErrors()) {
-            return "redirect:/produit";
-        }
-        produitService.create(produit);
-        return "redirect:/produit";
+    @PostMapping
+    public ResponseEntity<EntityModel<Produit>> create(@Valid @RequestBody Produit produit) {
+        Produit saved = productDoa.save(produit);
+        EntityModel<Produit> model = assembler.toModel(saved);
+        return ResponseEntity.created(model.getRequiredLink(IanaLinkRelations.SELF).toUri()).body(model);
     }
 
-    @GetMapping("/edit")
-    public String edit(@RequestParam("id") Long id, Model model) {
-        Optional<Produit> produitOpt = produitService.findById(id);
-        if (produitOpt.isPresent()) {
-            model.addAttribute("produit", produitOpt.get());
-            model.addAttribute("listeproduits", produitService.findAll());
-            return "produit";
-        } else {
-            return "redirect:/produit"; // Redirige si le produit n'est pas trouvé
-        }
+    @PutMapping("/{id}")
+    public EntityModel<Produit> update(@PathVariable Long id, @Valid @RequestBody Produit input) {
+        Produit updated = productDoa.findById(id).map(old -> {
+            old.setDesignation(input.getDesignation());
+            old.setPrix(input.getPrix());
+            return productDoa.save(old);
+        }).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Produit non trouvé"));
+        return assembler.toModel(updated);
+    }
+
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@PathVariable Long id) {
+        productDoa.deleteById(id);
     }
 }
